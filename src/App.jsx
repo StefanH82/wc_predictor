@@ -122,8 +122,10 @@ const GROUP_TABS = ["A","B","C","D","E","F","G","H","I","J","K","L","KO"];
 function calcPoints(predictions, results) {
   let pts = 0;
   for (const [id, pred] of Object.entries(predictions)) {
+    if (!pred || pred.home == null || pred.away == null) continue;
     const r = results[id];
-    if (!r || pred.home==="" || pred.away==="") continue;
+    if (!r || r.home == null || r.away == null) continue;
+    if (pred.home==="" || pred.away==="" || r.home==="" || r.away==="") continue;
     const ph=parseInt(pred.home), pa=parseInt(pred.away);
     const rh=parseInt(r.home), ra=parseInt(r.away);
     if (isNaN(ph)||isNaN(pa)||isNaN(rh)||isNaN(ra)) continue;
@@ -138,7 +140,25 @@ function getInitials(n) {
   return n.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
 }
 
-// ─── ADMIN PIN ────────────────────────────────────────────────────────────────
+// ─── SAFE STORAGE WRAPPER ────────────────────────────────────────────────────
+// Falls back to localStorage if window.storage (Claude artifact API) unavailable
+const store = {
+  async get(key, shared) {
+    try {
+      if (window.storage) return await window.storage.get(key, shared);
+      const v = localStorage.getItem(key);
+      return v ? { value: v } : null;
+    } catch { return null; }
+  },
+  async set(key, value, shared) {
+    try {
+      if (window.storage) return await window.storage.set(key, value, shared);
+      localStorage.setItem(key, value); return { value };
+    } catch { return null; }
+  }
+};
+
+
 const ADMIN_PIN = "wc2026admin";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,11 +213,11 @@ export default function App() {
 
   async function loadGlobal() {
     try {
-      const lb = await window.storage.get("wc26_lb", true);
+      const lb = await store.get("wc26_lb", true);
       if (lb) setLeaderboard(JSON.parse(lb.value));
     } catch {}
     try {
-      const res = await window.storage.get("wc26_results", true);
+      const res = await store.get("wc26_results", true);
       if (res) setResults(JSON.parse(res.value));
     } catch {}
   }
@@ -205,7 +225,7 @@ export default function App() {
   async function loadMyPredictions(name) {
     try {
       const k = `wc26_p_${name.toLowerCase().replace(/\s+/g,"_")}`;
-      const p = await window.storage.get(k, true);
+      const p = await store.get(k, true);
       if (p) { setPredictions(JSON.parse(p.value)); setSubmitted(true); }
     } catch {}
   }
@@ -230,20 +250,20 @@ export default function App() {
       return p && p.home!=="" && p.away!=="";
     });
     // also allow predictions for future/null kickoff
-    const anyFilled = Object.values(predictions).some(p => p&&p.home!==""&&p.away!=="");
+    const anyFilled = Object.values(predictions).some(p => p!=null&&p.home!=null&&p.away!=null&&p.home!==""&&p.away!=="");
     if (!anyFilled) { showToast("Fill in at least one score","error"); return; }
     setSaving(true);
     try {
       const k = `wc26_p_${userName.toLowerCase().replace(/\s+/g,"_")}`;
-      await window.storage.set(k, JSON.stringify(predictions), true);
+      await store.set(k, JSON.stringify(predictions), true);
       const pts = calcPoints(predictions, results);
       const lb = [...leaderboard];
       const idx = lb.findIndex(e => e.name.toLowerCase()===userName.toLowerCase());
-      const total = Object.values(predictions).filter(p=>p&&p.home!==""&&p.away!=="").length;
+      const total = Object.values(predictions).filter(p=>p!=null&&p.home!=null&&p.away!=null&&p.home!==""&&p.away!=="").length;
       const entry = {name:userName,points:pts,count:total,submitted:new Date().toISOString()};
       if (idx>=0) lb[idx]=entry; else lb.push(entry);
       lb.sort((a,b)=>b.points-a.points);
-      await window.storage.set("wc26_lb", JSON.stringify(lb), true);
+      await store.set("wc26_lb", JSON.stringify(lb), true);
       setLeaderboard(lb); setSubmitted(true);
       showToast(`Saved! ${total} predictions · ${pts} pts so far`);
     } catch { showToast("Save failed","error"); }
@@ -363,7 +383,7 @@ Use exact team names as given. Be precise with scores.`;
       }
 
       // Save results
-      await window.storage.set("wc26_results", JSON.stringify(newResults), true);
+      await store.set("wc26_results", JSON.stringify(newResults), true);
       setResults(newResults);
 
       // Recalculate all leaderboard scores
@@ -372,14 +392,14 @@ Use exact team names as given. Be precise with scores.`;
       const updated_lb = await Promise.all(lb.map(async entry => {
         try {
           const k = `wc26_p_${entry.name.toLowerCase().replace(/\s+/g,"_")}`;
-          const p = await window.storage.get(k, true);
+          const p = await store.get(k, true);
           if (!p) return entry;
           const preds = JSON.parse(p.value);
           return {...entry, points: calcPoints(preds, newResults)};
         } catch { return entry; }
       }));
       updated_lb.sort((a,b)=>b.points-a.points);
-      await window.storage.set("wc26_lb", JSON.stringify(updated_lb), true);
+      await store.set("wc26_lb", JSON.stringify(updated_lb), true);
       setLeaderboard(updated_lb);
       setLastFetched(new Date());
       setFetchLog(prev => [...prev, `🏆 Leaderboard updated for ${updated_lb.length} player(s)!`]);
@@ -398,7 +418,7 @@ Use exact team names as given. Be precise with scores.`;
 
   const activeMatchList = getGroupMatchList(activeGroup);
   const adminMatchList = getGroupMatchList(adminGroup);
-  const totalPreds = Object.values(predictions).filter(p=>p&&p.home!==""&&p.away!=="").length;
+  const totalPreds = Object.values(predictions).filter(p=>p!=null&&p.home!=null&&p.away!=null&&p.home!==""&&p.away!=="").length;
   const totalResults = Object.keys(results).length;
 
   // ─── RENDER ────────────────────────────────────────────────────────────────
@@ -591,7 +611,7 @@ Use exact team names as given. Be precise with scores.`;
               }}>
                 {GROUP_TABS.map(g => {
                   const gm = getGroupMatchList(g);
-                  const filled = gm.filter(m=>{const p=predictions[m.id];return p&&p.home!==""&&p.away!==""}).length;
+                  const filled = gm.filter(m=>{const p=predictions[m.id];return p!=null&&p.home!=null&&p.away!=null&&p.home!==""&&p.away!==""}).length;
                   const done = filled===gm.length && gm.length>0;
                   const hasLive = gm.some(m=>isPredictionLocked(m.kickoff)&&!results[m.id]);
                   return (
@@ -617,8 +637,8 @@ Use exact team names as given. Be precise with scores.`;
                   const pred = predictions[match.id] || {home:"",away:""};
                   const result = results[match.id];
                   const locked = isPredictionLocked(match.kickoff);
-                  const hasPred = pred.home!==""&&pred.away!=="";
-                  const hasResult = result?.home!==""&&result?.away!=="";
+                  const hasPred = pred && pred.home!==""&&pred.away!=="";
+                  const hasResult = result!=null && result.home!=null && result.away!=null && result.home!==""&&result.away!=="";
                   const deadline = timeUntilDeadline(match.kickoff);
 
                   // Points badge for finished match
@@ -1045,7 +1065,7 @@ Use exact team names as given. Be precise with scores.`;
                             onChange={async e => {
                               const newR = {...results,[match.id]:{...(results[match.id]||{}),home:e.target.value}};
                               setResults(newR);
-                              await window.storage.set("wc26_results",JSON.stringify(newR),true);
+                              await store.set("wc26_results",JSON.stringify(newR),true);
                             }}
                             placeholder="-"
                             style={{
@@ -1062,7 +1082,7 @@ Use exact team names as given. Be precise with scores.`;
                             onChange={async e => {
                               const newR = {...results,[match.id]:{...(results[match.id]||{}),away:e.target.value}};
                               setResults(newR);
-                              await window.storage.set("wc26_results",JSON.stringify(newR),true);
+                              await store.set("wc26_results",JSON.stringify(newR),true);
                             }}
                             placeholder="-"
                             style={{
@@ -1085,18 +1105,18 @@ Use exact team names as given. Be precise with scores.`;
                   <button onClick={async () => {
                     setSaving(true);
                     try {
-                      await window.storage.set("wc26_results",JSON.stringify(results),true);
+                      await store.set("wc26_results",JSON.stringify(results),true);
                       const lb=[...leaderboard];
                       const updated=await Promise.all(lb.map(async entry=>{
                         try {
                           const k=`wc26_p_${entry.name.toLowerCase().replace(/\s+/g,"_")}`;
-                          const p=await window.storage.get(k,true);
+                          const p=await store.get(k,true);
                           if(!p) return entry;
                           return {...entry,points:calcPoints(JSON.parse(p.value),results)};
                         } catch { return entry; }
                       }));
                       updated.sort((a,b)=>b.points-a.points);
-                      await window.storage.set("wc26_lb",JSON.stringify(updated),true);
+                      await store.set("wc26_lb",JSON.stringify(updated),true);
                       setLeaderboard(updated);
                       showToast("Scores saved & leaderboard recalculated");
                     } catch { showToast("Save failed","error"); }
